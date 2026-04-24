@@ -5,6 +5,15 @@ import pandas as pd
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Andesmar Pro - Sistema A.P.O.", layout="wide")
 
+# --- ESTADOS GLOBALES (PERSISTENCIA) ---
+if 'estado_paso' not in st.session_state:
+    st.session_state.estado_paso = "ABIERTO"
+
+# --- PARÁMETROS ---
+DIAS_MICRO_RETORNO = 10
+DIAS_PAREJA_RETORNO = 13
+DIAS_TOTAL_FRANCO = 6
+
 # --- FUNCIONES DE LÓGICA DE TRAMOS ---
 def obtener_info_ruta_nac(p):
     etapas = {
@@ -15,29 +24,53 @@ def obtener_info_ruta_nac(p):
         13: "Llegando a Base"
     }
     tramo = etapas.get(p["dia_del_ciclo"], "En ruta")
-    progreso = p["dia_del_ciclo"] / 13
+    progreso = min(p["dia_del_ciclo"] / 13, 1.0)
     return tramo, progreso
 
 def obtener_detalle_franco_nac(p):
     hoy = datetime.datetime.now()
     dias_pasados = (hoy - p["ultimo_arribo"]).days
-    dias_restantes = 6 - dias_pasados
+    dias_restantes = DIAS_TOTAL_FRANCO - dias_pasados
     return f"Faltan {max(0, dias_restantes)} días", max(0, dias_restantes)
 
-# --- INICIALIZACIÓN DE DATOS PERSISTENTES ---
+# --- INICIALIZACIÓN DE DATOS CON LÓGICA DE PRECISIÓN ---
 if 'db_parejas_nac' not in st.session_state:
-    apellidos_nac = ["GARCIA-LOPEZ", "MARTINEZ-RUIZ", "RODRIGUEZ-SOSA", "GONZALEZ-DIAZ", "PEREZ-SANTOS", "SANCHEZ-ORTEGA", "ROMERO-CASTRO", "FERNANDEZ-GIL", "ALVAREZ-MOYA", "GOMEZ-VALDEZ", "RAMIREZ-CANO", "MORALES-NIETO", "FLORES-RIVAS", "BENITEZ-AGUADO", "VARGAS-CALVO", "CASTILLO-LOZA", "MENDEZ-PUERTA", "GUZMAN-VACA", "PACHECO-PEÑA", "VILLALBA-LUZ"]
+    apellidos_nac = [
+        "GARCIA-LOPEZ", "MARTINEZ-RUIZ", "RODRIGUEZ-SOSA", "GONZALEZ-DIAZ", 
+        "PEREZ-SANTOS", "SANCHEZ-ORTEGA", "ROMERO-CASTRO", "FERNANDEZ-GIL", 
+        "ALVAREZ-MOYA", "GOMEZ-VALDEZ", "RAMIREZ-CANO", "MORALES-NIETO", 
+        "FLORES-RIVAS", "BENITEZ-AGUADO", "VARGAS-CALVO", "CASTILLO-LOZA", 
+        "MENDEZ-PUERTA", "GUZMAN-VACA", "PACHECO-PEÑA", "VILLALBA-LUZ", 
+        "PAREJA 115", "PAREJA 116"
+    ]
     db_nac = []
     hoy = datetime.datetime.now()
+    
+    st.session_state.int_nac = ["5394", "5395", "5396", "5397", "5398", "5399", "5501", "5502", "5503", "5504", "115", "116"]
+    
     for i, ape in enumerate(apellidos_nac):
-        dia = (i % 19) + 1
+        if i <= 12:
+            dia = i + 1
+            estado = "EN RUTA"
+            f_arribo = hoy - datetime.timedelta(days=1)
+        elif i <= 18:
+            dia = 14
+            estado = "FRANCO"
+            dias_ya_descansados = i - 13 
+            f_arribo = hoy - datetime.timedelta(days=dias_ya_descansados)
+        else:
+            dia = 14
+            estado = "LISTO (RESERVA)"
+            f_arribo = hoy - datetime.timedelta(days=DIAS_TOTAL_FRANCO)
+            
         db_nac.append({
-            "pareja": ape, "estado": "EN RUTA" if dia <= 13 else "FRANCO", 
-            "dia_del_ciclo": dia, "ultimo_arribo": hoy - datetime.timedelta(days=(dia-13) if dia > 13 else 0),
-            "obs": ""
+            "pareja": ape, 
+            "estado": estado, 
+            "dia_del_ciclo": dia, 
+            "ultimo_arribo": f_arribo,
+            "obs": "Refuerzo" if i >= 19 else ""
         })
     st.session_state.db_parejas_nac = db_nac
-    st.session_state.int_nac = ["5394", "5395", "5396", "5397", "5398", "5399", "5501", "5502", "5503", "5504"]
 
 if 'db_chile' not in st.session_state:
     st.session_state.db_chile = [
@@ -53,16 +86,29 @@ if 'db_chile' not in st.session_state:
 with st.sidebar:
     st.title("Andesmar Pro")
     st.divider()
-    modo = st.radio("Menú Principal:", ["📊 Panel General", "🇨🇱 Línea CHILE", "🇦🇷 Línea NACIONAL", "👥 DIAGRAMACIÓN"])
+    modo = st.radio("Menú Principal:", ["📊 Panel General", "🇨🇱 Línea CHILE", "🇦🇷 Mendoza, Jujuy y Gallegos", "👥 DIAGRAMACIÓN"])
 
 # --- VISTAS ---
 
 if modo == "📊 Panel General":
     st.title("Operaciones Globales")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Unidades Nac. en Ruta", len([p for p in st.session_state.db_parejas_nac if p['estado']=="EN RUTA"]))
-    c2.metric("Servicios Chile Hoy", len(st.session_state.db_chile))
-    c3.metric("Paso Internacional", "ABIERTO")
+    c1.metric("En Ruta (Nac.)", len([p for p in st.session_state.db_parejas_nac if p['estado']=="EN RUTA"]))
+    c2.metric("Disponibles (Base)", len([p for p in st.session_state.db_parejas_nac if p['estado']!="EN RUTA"]))
+    
+    # Selector de estado del paso
+    color_paso = {"ABIERTO": "green", "CERRADO": "red", "PREVENTIVO": "orange"}
+    with c3:
+        st.markdown(f"**Paso Internacional:** {st.session_state.estado_paso}", unsafe_allow_html=True)
+        nuevo_estado = st.selectbox("Cambiar estado:", ["ABIERTO", "CERRADO", "PREVENTIVO"], index=["ABIERTO", "CERRADO", "PREVENTIVO"].index(st.session_state.estado_paso))
+        if nuevo_estado != st.session_state.estado_paso:
+            st.session_state.estado_paso = nuevo_estado
+            st.rerun()
+
+    if st.session_state.estado_paso == "CERRADO":
+        st.error("⚠️ ALERTA: PASO CERRADO. Salidas a Chile suspendidas.")
+    elif st.session_state.estado_paso == "PREVENTIVO":
+        st.warning("⚠️ AVISO: Posible cierre de paso por condiciones climáticas.")
 
 elif modo == "🇨🇱 Línea CHILE":
     st.title("Fichas de Servicio: Chile")
@@ -73,59 +119,73 @@ elif modo == "🇨🇱 Línea CHILE":
             with col2:
                 st.write(f"**Pareja:** {serv['pareja']}")
                 st.write(f"**Tramo:** {serv['tramo']}")
-                if serv['obs']: st.warning(f"Nota: {serv['obs']}")
             with col3:
-                st.write(f"**Estado:** {serv['estado']}")
-                st.write(f"**Ubicación:** {serv['ubicacion']}")
-                st.progress(0.5, text=f"Hora: {serv['hora']}")
+                if st.session_state.estado_paso == "CERRADO" and serv['estado'] == "LISTO":
+                    st.error("SALIDA BLOQUEADA (Paso Cerrado)")
+                else:
+                    st.write(f"**Estado:** {serv['estado']}")
+                    st.write(f"**Ubicación:** {serv['ubicacion']}")
+                    st.progress(0.5)
 
-elif modo == "🇦🇷 Línea NACIONAL":
-    st.title("Fichas de Ruta: Nacional (Tramos Detallados)")
+elif modo == "🇦🇷 Mendoza, Jujuy y Gallegos":
+    st.title("Fichas de Ruta: Mendoza, Jujuy y Gallegos")
     for i, interno in enumerate(st.session_state.int_nac):
         p = st.session_state.db_parejas_nac[i]
-        if p["estado"] == "EN RUTA":
-            tramo_actual, porcentaje = obtener_info_ruta_nac(p)
-            with st.container(border=True):
-                col1, col2, col3 = st.columns([1, 2, 2])
-                with col1: st.markdown(f"## 🚍 {interno}")
-                with col2:
-                    st.write(f"**Pareja:** {p['pareja']}")
-                    st.write(f"**Tramo Actual:** {tramo_actual}")
-                    if p['obs']: st.warning(f"Nota: {p['obs']}")
-                with col3:
-                    st.write(f"**Estado:** EN RUTA")
-                    st.progress(porcentaje, text=f"Día {p['dia_del_ciclo']} de la vuelta")
+        with st.container(border=True):
+            col1, col2, col3 = st.columns([1, 2, 2])
+            with col1: st.markdown(f"## 🚍 {interno}")
+            with col2:
+                if interno in ["115", "116"]:
+                    st.write("**Unidad en Base:** Mendoza")
+                    st.write("*(Reserva Técnica / Sin pareja)*")
+                else:
+                    if p["estado"] == "EN RUTA":
+                        st.write(f"**Pareja:** {p['pareja']}")
+                        tramo_actual, _ = obtener_info_ruta_nac(p)
+                        st.write(f"**Tramo Actual:** {tramo_actual}")
+                    else:
+                        det_franco, _ = obtener_detalle_franco_nac(p)
+                        st.write(f"**Estado Base:** {p['estado']}")
+                        st.write(f"**Cronograma:** {det_franco}")
+            with col3:
+                if interno in ["115", "116"]:
+                    st.success("UNIDAD DISPONIBLE - LISTA")
+                elif p["estado"] == "EN RUTA":
+                    _, porcentaje = obtener_info_ruta_nac(p)
+                    st.progress(porcentaje, text=f"Día {p['dia_del_ciclo']} de 13")
+                else:
+                    st.info("Unidad en Mantenimiento/Base")
 
 elif modo == "👥 DIAGRAMACIÓN":
-    st.title("Módulo de Diagramación Integral (Manual)")
-    tab1, tab2 = st.tabs(["🇦🇷 Ajustes Nacional", "🇨🇱 Ajustes Chile"])
+    st.title("Módulo de Diagramación Integral")
+    tab1, tab2 = st.tabs(["🇦🇷 Ajustes Mendoza/Jujuy/Gallegos", "🇨🇱 Ajustes Chile"])
     
     with tab1:
-        st.subheader("Gestión de Parejas Nacionales")
         for idx, p in enumerate(st.session_state.db_parejas_nac):
-            det, dias = obtener_detalle_franco_nac(p) if p['estado'] == "FRANCO" else (f"Día {p['dia_del_ciclo']}/13", 0)
+            if p['estado'] == "EN RUTA":
+                det = f"Día {p['dia_del_ciclo']}/13"
+            else:
+                det, _ = obtener_detalle_franco_nac(p)
+            
             with st.expander(f"👤 {p['pareja']} - {p['estado']} ({det})"):
                 col1, col2 = st.columns(2)
                 with col1:
-                    nuevo_est = st.selectbox("Estado:", ["FRANCO", "EN RUTA"], index=0 if p['estado']=="FRANCO" else 1, key=f"est_n_{idx}")
+                    nuevo_est = st.selectbox("Cambiar Estado:", ["EN RUTA", "FRANCO", "LISTO (RESERVA)"], 
+                                             index=0 if p['estado']=="EN RUTA" else (1 if p['estado']=="FRANCO" else 2), 
+                                             key=f"est_n_{idx}")
                     if nuevo_est != p['estado']:
                         st.session_state.db_parejas_nac[idx]['estado'] = nuevo_est
                         st.rerun()
-                    if p['estado'] == "FRANCO":
-                        ajuste = st.number_input("Días de franco restantes:", value=dias, key=f"d_n_{idx}")
-                        if ajuste != dias:
-                            st.session_state.db_parejas_nac[idx]['ultimo_arribo'] = datetime.datetime.now() - datetime.timedelta(days=6-ajuste)
-                            st.rerun()
                 with col2:
+                    if p['estado'] != "EN RUTA":
+                        _, dias_actuales = obtener_detalle_franco_nac(p)
+                        ajuste = st.number_input("Días restantes de franco:", value=dias_actuales, key=f"d_n_{idx}")
+                        if ajuste != dias_actuales:
+                            st.session_state.db_parejas_nac[idx]['ultimo_arribo'] = datetime.datetime.now() - datetime.timedelta(days=DIAS_TOTAL_FRANCO - ajuste)
+                            st.rerun()
                     st.session_state.db_parejas_nac[idx]['obs'] = st.text_input("Observación:", value=p['obs'], key=f"obs_n_{idx}")
 
     with tab2:
-        st.subheader("Gestión de Servicios Chile")
         for idx, c in enumerate(st.session_state.db_chile):
             with st.expander(f"🚍 {c['interno']} - {c['pareja']}"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.session_state.db_chile[idx]['estado'] = st.selectbox("Estado:", ["LISTO", "EN RUTA", "DESCANSO"], index=1 if c['estado']=="EN RUTA" else 0, key=f"est_c_{idx}")
-                    st.session_state.db_chile[idx]['ubicacion'] = st.text_input("Ubicación:", value=c['ubicacion'], key=f"ub_c_{idx}")
-                with col2:
-                    st.session_state.db_chile[idx]['obs'] = st.text_input("Nota:", value=c['obs'], key=f"obs_c_{idx}")
+                st.session_state.db_chile[idx]['estado'] = st.selectbox("Estado:", ["LISTO", "EN RUTA", "DESCANSO"], key=f"est_c_{idx}")
